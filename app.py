@@ -122,8 +122,8 @@ if not os.path.exists(DB_PATH):
     init_db()
 
 # --- UI ---
-st.title("✍️ 日報作成支援 PoC")
-st.caption("かたひも")
+st.title("✍️ 日報作成")
+st.caption("TAYO-LINE")
 
 st.markdown("---")
 
