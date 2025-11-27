@@ -4,6 +4,8 @@ import streamlit as st
 import google.generativeai as genai
 import json
 from datetime import datetime
+import sqlite3
+import os
 
 # --- ページ設定 ---
 st.set_page_config(
@@ -67,6 +69,44 @@ PROMPT_TEMPLATE = """
 }}
 """
 
+
+# --- DB設定 ---
+DB_PATH = os.path.join(os.path.dirname(__file__), "reports.db")
+
+def init_db():
+    conn = sqlite3.connect(DB_PATH)
+    c = conn.cursor()
+    c.execute('''CREATE TABLE IF NOT EXISTS reports (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        created_at TEXT,
+        input_text TEXT,
+        internal_report TEXT,
+        customer_report TEXT
+    )''')
+    conn.commit()
+    conn.close()
+
+def insert_report(created_at: str, input_text: str, internal_report: str, customer_report: str):
+    conn = sqlite3.connect(DB_PATH)
+    c = conn.cursor()
+    c.execute('''INSERT INTO reports (created_at, input_text, internal_report, customer_report)
+                 VALUES (?, ?, ?, ?)''', (created_at, input_text, internal_report, customer_report))
+    conn.commit()
+    conn.close()
+
+def fetch_all_reports():
+    conn = sqlite3.connect(DB_PATH)
+    c = conn.cursor()
+    c.execute('SELECT created_at, input_text, internal_report, customer_report FROM reports ORDER BY id DESC')
+    rows = c.fetchall()
+    conn.close()
+    return rows
+
+def reset_db():
+    if os.path.exists(DB_PATH):
+        os.remove(DB_PATH)
+    init_db()
+
 # --- 状態管理 ---
 if 'internal_report' not in st.session_state:
     st.session_state.internal_report = ""
@@ -74,102 +114,113 @@ if 'customer_report' not in st.session_state:
     st.session_state.customer_report = ""
 if 'reports_generated' not in st.session_state:
     st.session_state.reports_generated = False
+if 'input_text' not in st.session_state:
+    st.session_state.input_text = ""
+
+# DBファイルがなければ初回のみ初期化
+if not os.path.exists(DB_PATH):
+    init_db()
 
 # --- UI ---
 st.title("✍️ 日報作成支援 PoC")
-st.caption("Streamlit版")
+st.caption("かたひも")
 
 st.markdown("---")
 
-# 1. 入力エリア
+
+# --- UI ---
 st.subheader("1. 日報内容の入力")
-input_text = st.text_area(
+st.session_state.input_text = st.text_area(
     "こちらに日報の元となるテキストを入力してください。",
+    value=st.session_state.input_text,
     height=150,
     placeholder="例：夜泣きが収まらず、お母さんはほとんど睡眠時間を取れていないとのことで午前中は別室で寝ていた。育児のがんばりに寄り添いながらねぎらいの言葉がけを心がけた。午前中は嘉浩くんも長い睡眠をとることができて、午後は機嫌よく遊ぶことができた。いないいないばあをすると喜ぶ姿が見られた。"
 )
 
-# 2. 生成ボタン
 if st.button("🤖 日報を生成する", type="primary", use_container_width=True):
-    if not input_text:
+    if not st.session_state.input_text:
         st.warning("日報内容を入力してください。")
     else:
         with st.spinner("Gemini APIと通信中..."):
-            # ★★★ 修正点3: API呼び出しとエラーハンドリングを強化 ★★★
             try:
-                prompt = PROMPT_TEMPLATE.format(report_text=input_text)
+                prompt = PROMPT_TEMPLATE.format(report_text=st.session_state.input_text)
                 response = model.generate_content(prompt)
-                
-                # JSONモードのため、レスポンスは直接JSONとして解析できる
                 reports = json.loads(response.text)
-
                 st.session_state.internal_report = reports["internal_report"]
                 st.session_state.customer_report = reports["customer_report"]
                 st.session_state.reports_generated = True
-                
                 st.success("日報の生成が完了しました！")
-
             except Exception as e:
                 st.error(f"APIリクエスト中にエラーが発生しました: {e}")
-                # デバッグ用に、APIから返ってきた生のテキストを表示
                 if 'response' in locals():
                     st.error(f"受信したテキスト: {response.text}")
                 st.session_state.reports_generated = False
 
 st.markdown("---")
 
-# 3. 確認・出力エリア
-st.subheader("2. 生成された日報の確認")
+st.subheader("2. 生成された日報の確認・編集・保存")
 
 if st.session_state.reports_generated:
     col1, col2 = st.columns(2)
-
     with col1:
         st.info("🏢 社内向けレポート")
-        st.text_area(
-            "internal_report",
+        internal_report_edit = st.text_area(
+            "internal_report_edit",
             value=st.session_state.internal_report,
             height=200,
-            label_visibility="collapsed"
+            label_visibility="collapsed",
+            key="internal_report_edit"
         )
-
     with col2:
         st.info("👨‍👩‍👧‍👦 顧客向けレポート")
-        st.text_area(
-            "customer_report",
+        customer_report_edit = st.text_area(
+            "customer_report_edit",
             value=st.session_state.customer_report,
             height=200,
-            label_visibility="collapsed"
+            label_visibility="collapsed",
+            key="customer_report_edit"
         )
-
-    st.markdown("---")
-    
-    # 4. ダウンロード
-    st.subheader("3. レポートのダウンロード")
-    
-    now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-    # CSVエクスポート用にダブルクォートをエスケープ
-    internal_escaped = st.session_state.internal_report.replace('"', '""')
-    customer_escaped = st.session_state.customer_report.replace('"', '""')
-    internal_csv = f'日時,内容\n"{now}","{internal_escaped}"'
-    customer_csv = f'日時,内容\n"{now}","{customer_escaped}"'
-
-    col_dl1, col_dl2 = st.columns(2)
-    with col_dl1:
-        st.download_button(
-            label="📥 社内向けCSVをダウンロード",
-            data=internal_csv.encode('utf-8-sig'), # BOM付きUTF-8
-            file_name=f"internal_report_{datetime.now().strftime('%Y%m%d_%H%M%S')}.csv",
-            mime='text/csv',
-            use_container_width=True
+    st.markdown(":rainbow[編集後の内容で保存する場合は下のボタンを押してください]")
+    if st.button("💾 レポート送信（DB保存）", key="send_both", use_container_width=True, type="primary"):
+        insert_report(
+            datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+            st.session_state.input_text,
+            internal_report_edit,
+            customer_report_edit
         )
-    with col_dl2:
-        st.download_button(
-            label="📥 顧客向けCSVをダウンロード",
-            data=customer_csv.encode('utf-8-sig'), # BOM付きUTF-8
-            file_name=f"customer_report_{datetime.now().strftime('%Y%m%d_%H%M%S')}.csv",
-            mime='text/csv',
-            use_container_width=True
-        )
+        st.success("レポートを保存しました！")
+        st.session_state.internal_report = internal_report_edit
+        st.session_state.customer_report = customer_report_edit
 else:
     st.info("ここに生成されたレポートが表示されます。")
+
+st.markdown("---")
+
+# 3. DB全件ダウンロード & 件数表示 & DB初期化
+st.subheader("3. 保存済みレポートのダウンロード")
+all_reports = fetch_all_reports()
+st.caption(f"現在の保存件数: {len(all_reports)} 件")
+col_dl, col_reset = st.columns([3,1])
+with col_dl:
+    if all_reports:
+        import csv
+        import io
+        output = io.StringIO()
+        writer = csv.writer(output, quoting=csv.QUOTE_ALL, lineterminator='\n')
+        writer.writerow(["日時", "入力データ", "社内向けレポート", "顧客向けレポート"])
+        for row in all_reports:
+            writer.writerow(row)
+        csv_data = output.getvalue().encode('utf-8-sig')
+        st.download_button(
+            label="📥 全レポートCSVダウンロード",
+            data=csv_data,
+            file_name=f"all_reports_{datetime.now().strftime('%Y%m%d_%H%M%S')}.csv",
+            mime='text/csv',
+            use_container_width=True
+        )
+    else:
+        st.info("保存済みレポートはありません。")
+with col_reset:
+    if st.button("🗑️ DB初期化", type="secondary", use_container_width=True):
+        reset_db()
+        st.success("データベースを初期化しました")
