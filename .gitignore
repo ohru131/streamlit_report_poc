@@ -1,0 +1,19 @@
+# Python bytecode
+__pycache__/
+*.pyc
+
+# Virtual environment
+.venv/
+venv/
+
+# Streamlit secrets
+.streamlit/secrets.toml
+
+# Generated CSV reports
+*.csv
+
+# macOS system files
+.DS_Store
+
+# Temporary files
+tmp/
